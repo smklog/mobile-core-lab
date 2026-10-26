@@ -11,6 +11,7 @@ All subscriber data uses test values (PLMN 001/01, test IMSIs, example keys).
 - Host: Windows 11 Pro, Ubuntu Server 26.04 VM on Hyper-V (4 vCPU, 4 GB)
 - Kernel requirements: SCTP (`modprobe sctp`) and TUN (`/dev/net/tun`)
 - Setup guide: [docs/setup-hyperv.md](docs/setup-hyperv.md)
+- Module 1 walkthrough (PDF, with diagrams): [docs/module1-5g-sa-guide.pdf](docs/module1-5g-sa-guide.pdf)
 
 ## Modules
 

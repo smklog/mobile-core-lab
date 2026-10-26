@@ -91,4 +91,5 @@ challenge passed. Security mode selected NIA2 integrity and NEA0 ciphering, so N
 - [`callflow.md`](callflow.md): Registration with 5G-AKA, PDU Session Establishment, UE-initiated Deregistration, N3, idle and Service Request, frame by frame
 - [`pcap/m1-n3-gtpu.pcap`](pcap/m1-n3-gtpu.pcap): N3 GTP-U with PDU Session container (QFI), UE ping to 8.8.8.8
 - [`failures.md`](failures.md): break/fix scenarios with captures (F1–F6)
+- [`../docs/module1-5g-sa-guide.pdf`](../docs/module1-5g-sa-guide.pdf): illustrated walkthrough of the whole module
 - [`pcap/m1-service-request.pcap`](pcap/m1-service-request.pcap): release to CM-IDLE, Service Request, N4 BUFF/FORW switch

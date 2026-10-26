@@ -164,9 +164,9 @@ For 250/99 it would be `52 f0 99`.
 | 112 | Registration Reject, **5GMM cause #62 No network slices available** | sent 0.4 ms after frame 111 |
 | 113/115 | UEContextReleaseCommand (nas: normal-release) / Complete | |
 
-**Why:** Requested NSSAI is a non-cleartext IE. Since Rel-15 security fixes, the UE sends only cleartext IEs
-in the initial Registration Request and the rest inside the NAS message container of Security Mode Complete
-(TS 24.501). So the AMF can only evaluate the slice after authentication and NAS security,
+**Why:** Requested NSSAI is a non-cleartext IE. With initial NAS message protection (TS 24.501), a UE
+without a valid security context sends only cleartext IEs in the initial Registration Request and the full
+message inside the NAS message container of Security Mode Complete. So the AMF can only evaluate the slice after authentication and NAS security,
 which is why authentication succeeds and the reject comes right after Security Mode Complete.
 Open5GS checks the requested S-NSSAI against its own `plmn_support` list; no match and no other allowed
 slice → #62. In a full deployment the AMF also checks subscribed S-NSSAIs from UDM (`am-data`) and may ask
@@ -175,8 +175,8 @@ the NSSF.
 `SD:0xffffff` in the AMF log means "no SD" (the reserved value used when SD is absent).
 
 **UE side:** UERANSIM does not handle #62 as a specific cause (`failed [?]`, "abnormal case") and goes to
-ATTEMPTING-REGISTRATION, so it will try again. A real UE stores the rejected NSSAI and does not request
-it again in that PLMN/registration area.
+ATTEMPTING-REGISTRATION, so it will try again. A commercial UE handles #62 as a defined cause and uses the
+Rejected NSSAI IE when the network includes it (Open5GS does not include it here).
 
 **How to find it in production:**
 1. Registration Reject #62 (or an Accept with Rejected NSSAI) for the subscriber.

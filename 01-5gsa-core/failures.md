@@ -9,7 +9,7 @@ Captures are in [`pcap/`](pcap/). Wireshark setup as in [callflow.md](callflow.m
 | F1 | OPc on UE differs from the subscriber record | Authentication Reject, USIM considered invalid | #20 MAC failure | [f1-bad-opc.pcap](pcap/f1-bad-opc.pcap) |
 | F2 | gNB broadcasts a PLMN the AMF does not serve | gNB never comes up, no cell for the UE | NGAP misc: unknown-PLMN-or-SNPN, TimeToWait 10 s | [f2-bad-plmn.pcap](pcap/f2-bad-plmn.pcap) |
 | F3 | UE requests S-NSSAI SST 2, network serves only SST 1 | Registration Reject after authentication | #62 No network slices available | [f3-bad-sst.pcap](pcap/f3-bad-sst.pcap) |
-| F4 | Wrong DNN | | | to do |
+| F4 | UE requests DNN `corp`, subscriber has only `internet` | Registered, but no PDU session | 5GMM #91 DNN not supported or not subscribed in the slice | [f4-bad-dnn.pcap](pcap/f4-bad-dnn.pcap) |
 | F5 | UPF down | | | to do |
 | F6 | NRF down | | | to do |
 
@@ -186,3 +186,56 @@ Rejected NSSAI IE when the network includes it (Open5GS does not include it here
    If one UE: subscription or UE URSP/configured NSSAI.
 
 **Fix:** use SST 1 on the UE, or provision SST 2 on the AMF and in the subscription.
+
+---
+
+## F4. DNN not subscribed
+
+**Break:** UE session config with `apn: 'corp'` (`config/bad-dnn.yaml`). The subscriber has only DNN
+`internet` in slice SST 1.
+
+**UE log:**
+```
+[nas] Initial Registration is successful
+[nas] Sending PDU Session Establishment Request
+[nas] Configuration Update Command received
+[nas] MM status received with cause [DNN_NOT_SUPPORTED_OR_NOT_SUBSCRIBED]
+```
+
+**AMF log:**
+```
+[gmm] WARNING: [imsi-250990000000001] Ue requested DNN "corp" Not Supported OR Not Subscribed in the Slice
+```
+`smf.log` has no new lines: the request never reaches an SMF.
+
+**Capture** (`f4-bad-dnn.pcap`, 249 frames, NRF heartbeats removed):
+
+| Frame | Message | Note |
+|-------|---------|------|
+| 1–240 | Registration with 5G-AKA, Security Mode, Registration Accept | registration is fine |
+| 155–177 | AMF → UDM → UDR `GET .../smf-select-data` → `200` | body: `{"subscribedSnssaiInfos":{"1":{"dnnInfos":[{"dnn":"internet","defaultDnnIndicator":true}]}}}` |
+| 243 | Registration Complete + UL NAS Transport, PDU Session Establishment Request | PSI 1, request type initial, S-NSSAI SST 1, **DNN `corp`** |
+| 245 | DL NAS Transport, **5GMM STATUS, cause #91** DNN not supported or not subscribed in the slice | answered by the AMF 0.8 ms later |
+| 247–249 | UEContextReleaseRequest (radio-connection-with-ue-lost) / Command / Complete | UE process stopped |
+
+No `nsmf-pdusession`, no PCF, no PFCP: the AMF stops the request itself.
+
+**Why:** during registration the AMF reads the SMF Selection Subscription Data from UDM (subscribed DNNs per
+S-NSSAI). When the UL NAS Transport carries a PDU Session Establishment Request for a DNN that is not in that
+list for the requested S-NSSAI, the AMF does not select an SMF and returns 5GMM cause #91.
+
+Open5GS answers with a **5GMM STATUS** message. As I read TS 24.501 (UL NAS TRANSPORT that the AMF cannot
+forward), the expected answer is a DL NAS TRANSPORT that returns the 5GSM message to the UE with 5GMM cause
+#91. The cause is the same, the message type differs; worth knowing when comparing vendors.
+
+Compare with a DNN that is subscribed but not configured on the SMF/UPF: then the AMF forwards the request,
+and the SMF rejects it with a 5GSM cause (#27 missing or unknown DNN) inside PDU Session Establishment Reject.
+So the first question in troubleshooting is *who* rejected: 5GMM cause from the AMF vs 5GSM cause from the SMF.
+
+**How to find it in production:**
+1. UE: registered, no data. Trace the UL NAS Transport and the answer.
+2. 5GMM #91 from the AMF → subscription (UDM `smf-selection-subscription-data` / `sm-data`) or a DNN typo
+   in the device/APN profile (`internet` vs `internet.mnc099.mcc250.gprs` style FQDNs).
+3. 5GSM #27 from the SMF → DNN missing in SMF/UPF configuration or DNS/NRF lookup for that DNN.
+
+**Fix:** set the UE DNN to `internet`, or add DNN `corp` to the subscription and to SMF/UPF.

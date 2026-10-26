@@ -90,6 +90,6 @@ challenge passed. Security mode selected NIA2 integrity and NEA0 ciphering, so N
 - [`pcap/m1-registration.pcap`](pcap/m1-registration.pcap): N2 (NGAP), N1 NAS (NEA0, readable), N4 (PFCP), SBI (HTTP/2 via SCP)
 - [`callflow.md`](callflow.md): Registration with 5G-AKA, PDU Session Establishment, UE-initiated Deregistration, frame by frame
 - [`pcap/m1-n3-gtpu.pcap`](pcap/m1-n3-gtpu.pcap): N3 GTP-U with PDU Session container (QFI), UE ping to 8.8.8.8
-- [`failures.md`](failures.md): break/fix scenarios with captures (F1 done)
+- [`failures.md`](failures.md): break/fix scenarios with captures (F1–F5 done)
 - to add: Service Request
 - `failures.md`: wrong K/OPc, foreign PLMN, S-NSSAI mismatch, wrong DNN, UPF down, NRF down

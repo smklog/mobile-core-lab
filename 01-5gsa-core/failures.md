@@ -10,7 +10,7 @@ Captures are in [`pcap/`](pcap/). Wireshark setup as in [callflow.md](callflow.m
 | F2 | gNB broadcasts a PLMN the AMF does not serve | gNB never comes up, no cell for the UE | NGAP misc: unknown-PLMN-or-SNPN, TimeToWait 10 s | [f2-bad-plmn.pcap](pcap/f2-bad-plmn.pcap) |
 | F3 | UE requests S-NSSAI SST 2, network serves only SST 1 | Registration Reject after authentication | #62 No network slices available | [f3-bad-sst.pcap](pcap/f3-bad-sst.pcap) |
 | F4 | UE requests DNN `corp`, subscriber has only `internet` | Registered, but no PDU session | 5GMM #91 DNN not supported or not subscribed in the slice | [f4-bad-dnn.pcap](pcap/f4-bad-dnn.pcap) |
-| F5 | UPF down | | | to do |
+| F5 | UPF stopped, SMF has no PFCP association | Registered, PDU session rejected on every retry | 5GSM #38 Network failure | [f5-upf-down.pcap](pcap/f5-upf-down.pcap) |
 | F6 | NRF down | | | to do |
 
 ---
@@ -239,3 +239,85 @@ So the first question in troubleshooting is *who* rejected: 5GMM cause from the 
 3. 5GSM #27 from the SMF → DNN missing in SMF/UPF configuration or DNS/NRF lookup for that DNN.
 
 **Fix:** set the UE DNN to `internet`, or add DNN `corp` to the subscription and to SMF/UPF.
+
+---
+
+## F5. UPF down
+
+**Break:** `sudo systemctl stop open5gs-upfd`, then start the UE with the normal config. Restored with
+`sudo systemctl start open5gs-upfd`.
+
+**UE log:**
+```
+[nas] Initial Registration is successful
+[nas] Sending PDU Session Establishment Request
+[nas] PDU Session Establishment Reject received [NETWORK_FAILURE]
+[nas] Sending PDU Session Establishment Request
+[nas] PDU Session Establishment Reject received [NETWORK_FAILURE]
+...
+```
+
+**SMF log:**
+```
+LOCAL No Reponse. Give up! for step 1 type 5 peer [127.0.0.7]:8805
+Retry association with peer failed
+No UPFs are PFCP associated that are suited to RR
+[imsi-250990000000001:1] No associated UPF
+smf_npcf_smpolicycontrol_handle_create() failed
+```
+(`Reponse` is spelled that way in the Open5GS log.)
+
+**Capture** (`f5-upf-down.pcap`, 180 frames; NRF heartbeats and the EPC SGW-C/SGW-U PFCP removed; only the
+first two PDU attempts kept):
+
+| Frame | Time | Message | Note |
+|-------|------|---------|------|
+| 1–4 | 22:01:09.9 | PFCP Heartbeat Request/Response, both directions, SMF ↔ UPF | last good exchange |
+| 5–7 | 22:01:20.9, 23.4, 25.9 | PFCP Heartbeat Request SMF → UPF, no response | UPF already stopped; 3 tries 2.5 s apart |
+| 8–13 | 22:01:28.4 … 44.4 | PFCP Association Setup Request, no response | SMF dropped the association and tries to set it up again |
+| 14–77 | 22:01:45.71–45.75 | Registration, 5G-AKA, Security Mode, AM policy, Registration Accept | registration does not touch the UPF and works |
+| 78 | 45.958 | Registration Complete + UL NAS Transport, PDU Session Establishment Request | PSI 1, DNN `internet`, SST 1 |
+| 80–81 | 45.959 | AMF → SMF `POST /nsmf-pdusession/v1/sm-contexts` | |
+| 82–93 | 45.961–45.967 | SMF → UDM `sm-data`, `sdm-subscriptions` | |
+| 94 | 45.967 | SMF → AMF `201 Created` | the SM context is created before a UPF is chosen |
+| 95–107 | 45.967–45.973 | SMF → PCF `POST sm-policies` → `201`; PCF → BSF `POST pcfBindings` → `201` | |
+| 108–115 | 45.974–45.976 | SMF → PCF `POST sm-policies/5/delete`; PCF → BSF `DELETE pcfBindings/5` | rollback: no UPF to put the session on |
+| 116–117 | 45.976 | SMF → AMF `POST /namf-comm/v1/ue-contexts/imsi-.../n1-n2-messages` | carries the N1 reject |
+| 118 | 45.980 | DL NAS Transport, **PDU Session Establishment Reject, 5GSM cause #38 Network failure** | about 22 ms after the request; no Back-off timer IE |
+| 122–161 | 46.810–46.832 | first retry, same sequence, same reject | |
+| 162–164, 168–171 | 22:01:50.4 … 22:02:12.4 | PFCP Association Setup Request, no response | keeps trying while the UPF is down |
+| 165–167 | 22:01:59.3 | UEContextReleaseRequest (radio-connection-with-ue-lost) / Command / Complete | UE process stopped |
+| 172 | 22:02:12.449 | **PFCP Association Setup Response** UPF → SMF | UPF started again |
+| 173–180 | 22:02:12.45 | Heartbeats both ways, a second Association Setup exchange | association is back |
+
+In the full capture the UE retried 12 times between 22:01:45.96 and 22:01:56.73, mostly about 1.1 s apart.
+Every attempt got the same reject. The capture stops before a new UE run, so a successful session after the
+UPF restart is not in this file.
+
+**Timing seen here (Open5GS defaults, as observed, not configured):** PFCP heartbeat every ~11 s; on no answer,
+3 retries 2.5 s apart; then Association Setup Requests in groups of three 2.5 s apart with ~6 s between groups.
+The SMF noticed the UPF loss at most ~19 s after it happened (one heartbeat interval plus the retries).
+
+**Why:** the SMF can only create a session on a UPF it has a PFCP association with. With no associated UPF,
+UPF selection fails. Open5GS does that step after it has already created the SM context and the SM policy, so
+it rolls back the PCF policy and BSF binding and sends PDU Session Establishment Reject with 5GSM #38 through
+the AMF. Nothing on N2 or N3 shows the problem: the gNB and the AMF are healthy, registration works, only the
+N4 side is broken.
+
+The reject has no Back-off timer IE, so the UE retries at its own pace. One UE every second is harmless in a
+lab; in a network where a UPF dies under thousands of UEs, the same pattern becomes a signalling storm on the
+AMF and SMF. That is why a back-off timer in the reject matters in production.
+
+**How to find it in production:**
+1. UEs register fine but get 5GSM #38 (or other 5GSM causes) on PDU session setup. The cause comes from the
+   SMF, not the AMF (compare F4, where the AMF answers with 5GMM #91).
+2. Check N4 first: PFCP heartbeats and association state between the SMF and each UPF. A heartbeat request
+   with no response, followed by Association Setup Requests, means the UPF or the N4 path is down.
+3. If the SMF has several UPFs, check which ones serve this DNN/S-NSSAI/TAI. One UPF down should move new
+   sessions to the others; all of them down gives exactly this picture.
+4. Sessions that were already up on the dead UPF lose user plane. That needs a separate check (GTP-U on N3,
+   SMF session release/restoration behaviour); it was not tested here because no session existed.
+
+**Fix:** start the UPF (`systemctl start open5gs-upfd`), check `upf.log` for why it stopped, and confirm the
+PFCP association in `smf.log` before reattaching UEs.
+

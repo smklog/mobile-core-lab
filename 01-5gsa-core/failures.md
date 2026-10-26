@@ -8,7 +8,7 @@ Captures are in [`pcap/`](pcap/). Wireshark setup as in [callflow.md](callflow.m
 |---|--------|---------------|-------------------------|---------|
 | F1 | OPc on UE differs from the subscriber record | Authentication Reject, USIM considered invalid | #20 MAC failure | [f1-bad-opc.pcap](pcap/f1-bad-opc.pcap) |
 | F2 | gNB broadcasts a PLMN the AMF does not serve | gNB never comes up, no cell for the UE | NGAP misc: unknown-PLMN-or-SNPN, TimeToWait 10 s | [f2-bad-plmn.pcap](pcap/f2-bad-plmn.pcap) |
-| F3 | S-NSSAI mismatch | | | to do |
+| F3 | UE requests S-NSSAI SST 2, network serves only SST 1 | Registration Reject after authentication | #62 No network slices available | [f3-bad-sst.pcap](pcap/f3-bad-sst.pcap) |
 | F4 | Wrong DNN | | | to do |
 | F5 | UPF down | | | to do |
 | F6 | NRF down | | | to do |
@@ -125,3 +125,64 @@ For 250/99 it would be `52 f0 99`.
    gNB keeps retrying after that interval.
 
 **Fix:** set the gNB PLMN to 250/99 (or add the PLMN to the AMF), restart the gNB.
+
+---
+
+## F3. Requested slice not served
+
+**Break:** UE config with SST 2 instead of SST 1 in `default-nssai`, `configured-nssai` and the session
+(`config/bad-sst.yaml`). The AMF (`plmn_support.s_nssai`) and the subscriber only have SST 1.
+
+**UE log:**
+```
+[nas] Security Mode Command received
+[nas] Selected integrity[2] ciphering[0]
+[rrc] RRC Release received
+[nas] Initial Registration failed [?]
+[nas] Handling Registration Reject abnormal case
+[nas] UE switches to state [MM-DEREGISTERED/ATTEMPTING-REGISTRATION]
+```
+
+**AMF log:**
+```
+[gmm] ERROR: Cannot find Requested NSSAI [1]
+[gmm] ERROR:     PLMN_ID[MCC:250 MNC:99]
+[gmm] ERROR:     S_NSSAI[SST:2 SD:0xffffff]
+[gmm] ERROR: [suci-0-250-99-0000-0-0-0000000001] gmm_handle_security_mode_complete() failed [62] in type [65]
+[amf] WARNING: [suci-0-250-99-0000-0-0-0000000001] Registration reject [62]
+```
+
+**Capture** (`f3-bad-sst.pcap`, 117 frames, NRF heartbeats removed):
+
+| Frame | Message | Note |
+|-------|---------|------|
+| 1 | InitialUEMessage, Registration Request | cleartext IEs only, **no Requested NSSAI yet** |
+| 10–92 | AUSF / UDM / UDR | full 5G-AKA succeeds: the subscriber is valid |
+| 76/77 | Authentication Request / Response | |
+| 110 | Security Mode Command | |
+| 111 | Security Mode Complete with the full Registration Request | **Requested NSSAI: SST 2 (URLLC)**, no SD |
+| 112 | Registration Reject, **5GMM cause #62 No network slices available** | sent 0.4 ms after frame 111 |
+| 113/115 | UEContextReleaseCommand (nas: normal-release) / Complete | |
+
+**Why:** Requested NSSAI is a non-cleartext IE. Since Rel-15 security fixes, the UE sends only cleartext IEs
+in the initial Registration Request and the rest inside the NAS message container of Security Mode Complete
+(TS 24.501). So the AMF can only evaluate the slice after authentication and NAS security,
+which is why authentication succeeds and the reject comes right after Security Mode Complete.
+Open5GS checks the requested S-NSSAI against its own `plmn_support` list; no match and no other allowed
+slice → #62. In a full deployment the AMF also checks subscribed S-NSSAIs from UDM (`am-data`) and may ask
+the NSSF.
+
+`SD:0xffffff` in the AMF log means "no SD" (the reserved value used when SD is absent).
+
+**UE side:** UERANSIM does not handle #62 as a specific cause (`failed [?]`, "abnormal case") and goes to
+ATTEMPTING-REGISTRATION, so it will try again. A real UE stores the rejected NSSAI and does not request
+it again in that PLMN/registration area.
+
+**How to find it in production:**
+1. Registration Reject #62 (or an Accept with Rejected NSSAI) for the subscriber.
+2. Compare Requested NSSAI in Security Mode Complete with: AMF supported S-NSSAIs per TA, subscribed
+   S-NSSAIs in UDM, NSSF policy. Watch the SD: SST 1 / SD 000001 and SST 1 without SD are different slices.
+3. If many UEs fail: a slice was removed from the AMF/TA configuration or the gNB Supported TA list.
+   If one UE: subscription or UE URSP/configured NSSAI.
+
+**Fix:** use SST 1 on the UE, or provision SST 2 on the AMF and in the subscription.

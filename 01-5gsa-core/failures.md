@@ -66,7 +66,7 @@ RES*, which the network would detect.
 | #26 non-5G authentication unacceptable | AMF separation bit in AMF field not set | |
 
 **After the Reject** the UE sets 5U3 ROAMING NOT ALLOWED, deletes its 5G-GUTI and treats the USIM as
-invalid until power cycle (TS 24.501 §5.4.1.3.7), which is the `MM-DEREGISTERED/NO-SUPI` state above.
+invalid until power cycle (TS 24.501, 5G AKA procedure, "authentication not accepted by the network"), which is the `MM-DEREGISTERED/NO-SUPI` state above.
 
 **How to find it in production:**
 1. AMF log or NAS trace: Authentication Failure with cause #20 for this SUPI.

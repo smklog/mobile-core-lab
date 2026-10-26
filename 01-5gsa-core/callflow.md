@@ -145,10 +145,26 @@ TS 23.502 §4.2.2.3.2. Triggered with `nr-cli imsi-250990000000001 -e "deregiste
 | 2488/2490 | N2 | UEContextReleaseCommand / Complete | N2 signalling connection released |
 | 2500 | N2/N1 | InitialUEMessage, Registration Request | UERANSIM registers again after a normal (non switch-off) deregistration |
 
-## Not in this capture
+## 4. User plane on N3 (GTP-U)
 
-- N3 user-plane traffic (GTP-U): the ping was run before this capture; to be added.
-- Service Request (UE in CM-IDLE with pending uplink data): to be added.
+Capture: [`pcap/m1-n3-gtpu.pcap`](pcap/m1-n3-gtpu.pcap), filter `udp port 2152`, 5 pings from the UE
+(netns `ue1`, UE IP 10.45.0.5 for this session) to 8.8.8.8. TS 29.281 (GTP-U), TS 38.415 (PDU Session container).
+
+| Frames | Direction | Outer IP / TEID | Extension header | Inner packet |
+|--------|-----------|-----------------|------------------|--------------|
+| 1, 3, 5, 7, 9 | UL gNB → UPF | 127.0.0.1 → 127.0.0.7, TEID 0x0000ef73 (allocated by UPF) | PDU Session container, UL PDU SESSION INFORMATION, QFI 1 | 10.45.0.5 → 8.8.8.8 echo request |
+| 2, 4, 6, 8, 10 | DL UPF → gNB | 127.0.0.7 → 127.0.0.1, TEID 0x00000004 (allocated by gNB) | PDU Session container, DL PDU SESSION INFORMATION, QFI 1 | 8.8.8.8 → 10.45.0.5 echo reply |
+
+- T-PDU (message type 0xFF), UDP 2152 on both sides.
+- Each direction uses the TEID allocated by the receiver: UPF gives the UL F-TEID in PFCP Session
+  Establishment Response and N2 SM info; gNB gives the DL F-TEID in PDU Session Resource Setup Response,
+  which the SMF installs on the UPF with PFCP Session Modification.
+- QFI 1 is the default QoS flow (5QI 9) created at PDU session establishment.
+- RTT ~8 ms, all 5 replies received.
+
+## Not captured yet
+
+- Service Request (UE in CM-IDLE with pending uplink data).
 
 ## Capture note
 

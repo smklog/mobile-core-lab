@@ -4,7 +4,8 @@
 Register the UE, establish a PDU session, pass user-plane traffic.
 
 **Status:** registration, PDU session and user plane work (UE pings the UPF and the internet).
-Next: call-flow walkthrough from the capture, then failure scenarios.
+Call flows for Registration, PDU Session Establishment and Deregistration are in [callflow.md](callflow.md).
+Next: failure scenarios.
 
 ## Setup
 
@@ -86,6 +87,7 @@ challenge passed. Security mode selected NIA2 integrity and NEA0 ciphering, so N
 
 ## Captures and analysis
 
-- `pcap/`: N2 (NGAP), N1 NAS, N4 (PFCP), N3 (GTP-U), SBI (HTTP/2)
-- `callflow.md`: Registration with 5G-AKA (incl. SQN resync), PDU Session Establishment, Service Request, Deregistration
+- [`pcap/m1-registration.pcap`](pcap/m1-registration.pcap): N2 (NGAP), N1 NAS (NEA0, readable), N4 (PFCP), SBI (HTTP/2 via SCP)
+- [`callflow.md`](callflow.md): Registration with 5G-AKA, PDU Session Establishment, UE-initiated Deregistration, frame by frame
+- to add: N3 GTP-U user traffic, Service Request
 - `failures.md`: wrong K/OPc, foreign PLMN, S-NSSAI mismatch, wrong DNN, UPF down, NRF down

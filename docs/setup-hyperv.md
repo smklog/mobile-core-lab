@@ -13,10 +13,10 @@ Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V -All
 
 ## 2. Create the VM
 
-1. Download the Ubuntu Server 24.04 LTS ISO from ubuntu.com.
+1. Download the Ubuntu Server LTS ISO (24.04 or 26.04) from ubuntu.com.
 2. Hyper-V Manager → New → Virtual Machine:
    - Generation 2
-   - Memory: 8192 MB, dynamic memory off
+   - Memory: 8192 MB, dynamic memory off (4096 MB works for module 1)
    - Network: Default Switch
    - Disk: 50 GB
    - Install from the Ubuntu ISO

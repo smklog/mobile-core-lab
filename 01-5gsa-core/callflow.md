@@ -162,11 +162,43 @@ Capture: [`pcap/m1-n3-gtpu.pcap`](pcap/m1-n3-gtpu.pcap), filter `udp port 2152`,
 - QFI 1 is the default QoS flow (5QI 9) created at PDU session establishment.
 - RTT ~8 ms, all 5 replies received.
 
-## Not captured yet
+## 5. Release to CM-IDLE and UE-triggered Service Request
 
-- Service Request (UE in CM-IDLE with pending uplink data).
+Capture: [`pcap/m1-service-request.pcap`](pcap/m1-service-request.pcap) (40 frames: GTP-U, NGAP, N4 and the SMF
+calls; NRF heartbeats removed). UE IP 10.45.0.19, 5G-TMSI 0xc0000075.
 
-## Capture note
+How it was triggered: the PDU session was up and pinging, then the gNB released the UE from the UERANSIM CLI
+(`nr-cli UERANSIM-gnb-250-99-1 -e "ue-release 5"`), then the UE sent uplink data again.
+
+| Frame | Time | Message | Note |
+|-------|------|---------|------|
+| 1–6 | 22:18:04–06 | GTP-U, ping 8.8.8.8 | UL TEID 0x0000f68a (UPF), DL TEID 0x00000002 (gNB) |
+| 7 | 22:20:05.588 | NGAP UEContextReleaseRequest | from the gNB, cause radioNetwork unspecified; lists PDU session 1 |
+| 8–9 | 05.588 | AMF → SMF `POST sm-contexts/18/modify` | `upCnxState: DEACTIVATED`, with `ngApCause` and UE location |
+| 10–11 | 05.590 | PFCP Session Modification, Update FAR 1: **Apply Action BUFF + NOCP** | UPF now buffers downlink and notifies the SMF instead of sending it to the gNB |
+| 12–13 | 05.590 | SMF → AMF `200 OK` | |
+| 14–15 | 05.591 | UEContextReleaseCommand / Complete | UE goes to CM-IDLE, stays RM-REGISTERED |
+| 16 | 22:20:14.105 | InitialUEMessage, **Service Request** | Service type Data, 5G-S-TMSI (AMF Set 1, 5G-TMSI 0xc0000075), ngKSI 3; Uplink data status PSI 1 pending; PDU session status PSI 1 active. The full message also travels in the NAS message container |
+| 17–22 | 14.110–14.111 | AMF → SMF `sm-contexts/18/modify` `upCnxState: ACTIVATING` → `200` with N2 SM info `PDU_RES_SETUP_REQ` | SMF hands back the UL tunnel info for the gNB |
+| 23 | 14.112 | InitialContextSetupRequest + **Service Accept** | PDUSessionResourceSetupItemCxtReq: UPF 127.0.0.7, UL TEID 0x0000f68a, QFI 1 |
+| 24 | 14.114 | InitialContextSetupResponse | new gNB DL TEID **0x00000003** |
+| 25–26 | 14.114–14.118 | AMF → SMF `sm-contexts/18/modify` with `PDU_RES_SETUP_RSP` | |
+| 27–28 | 14.118 | PFCP Session Modification, Update FAR 1: **Apply Action FORW**, outer header TEID 0x00000003 | downlink forwarding back on, to the new gNB tunnel |
+| 29–30 | 14.119 | `200 OK` | |
+| 31–40 | 22:20:20–24 | GTP-U, ping 8.8.8.8, 5/5 replies | same UL TEID 0x0000f68a, new DL TEID 0x00000003 |
+
+Notes:
+- No authentication and no Security Mode Command: the AMF reuses the existing NAS security context (ngKSI 3).
+  Service Request to Service Accept took 7 ms.
+- The UE keeps its IP address and the UPF keeps its UL TEID. Only the gNB side of N3 is new (DL TEID 2 → 3),
+  because the gNB dropped the UE context on release.
+- While the UE was idle, the UPF had the downlink FAR on BUFF + NOCP. Downlink data at that point would have
+  made the SMF ask the AMF to page the UE (network-triggered Service Request). That path was not tested here.
+- The UE log shows `Service request required due to [IDLE-UPLINK-DATA-PENDING]` at 22:20:14.102, but the ping in
+  this capture starts at 22:20:20.2. The packet that set "uplink data pending" at 22:20:14 is not on N3 (the UE
+  was idle) and was not identified. It may be some other packet leaving the `ue1` namespace.
+
+## Capture note (registration capture)
 
 Two tcpdump processes briefly wrote to the same file; ~79 KB of interleaved records were dropped
-during repair and the remaining frames were re-sorted by time. Signalling for all three procedures above is complete.
+during repair and the remaining frames were re-sorted by time. Signalling for registration, PDU session and deregistration (sections 1–3) is complete.

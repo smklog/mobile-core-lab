@@ -10,6 +10,7 @@ All subscriber data uses test values (PLMN 001/01, test IMSIs, example keys).
 
 - Host: Windows PC, Ubuntu Server 24.04 VM (Hyper-V / VirtualBox)
 - Kernel requirements: SCTP (`modprobe sctp`) and TUN (`/dev/net/tun`)
+- Setup guide: [docs/setup-hyperv.md](docs/setup-hyperv.md)
 
 ## Modules
 

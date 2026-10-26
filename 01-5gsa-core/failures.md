@@ -11,7 +11,7 @@ Captures are in [`pcap/`](pcap/). Wireshark setup as in [callflow.md](callflow.m
 | F3 | UE requests S-NSSAI SST 2, network serves only SST 1 | Registration Reject after authentication | #62 No network slices available | [f3-bad-sst.pcap](pcap/f3-bad-sst.pcap) |
 | F4 | UE requests DNN `corp`, subscriber has only `internet` | Registered, but no PDU session | 5GMM #91 DNN not supported or not subscribed in the slice | [f4-bad-dnn.pcap](pcap/f4-bad-dnn.pcap) |
 | F5 | UPF stopped, SMF has no PFCP association | Registered, PDU session rejected on every retry | 5GSM #38 Network failure | [f5-upf-down.pcap](pcap/f5-upf-down.pcap) |
-| F6 | NRF down | | | to do |
+| F6 | NRF stopped | Nothing: registration and PDU session work | none; NFs get HTTP 500 from the SCP on NRF heartbeats | [f6-nrf-down.pcap](pcap/f6-nrf-down.pcap) |
 
 ---
 
@@ -320,4 +320,77 @@ AMF and SMF. That is why a back-off timer in the reject matters in production.
 
 **Fix:** start the UPF (`systemctl start open5gs-upfd`), check `upf.log` for why it stopped, and confirm the
 PFCP association in `smf.log` before reattaching UEs.
+
+---
+
+## F6. NRF down
+
+**Break:** `sudo systemctl stop open5gs-nrfd`, wait 15 s, start the UE with the normal config. Restored with
+`sudo systemctl start open5gs-nrfd`.
+
+**Result: the UE does not notice.** Registration and the PDU session succeed with the NRF down:
+```
+[nas] Initial Registration is successful
+[nas] PDU Session Establishment Accept received
+[nas] PDU Session establishment is successful PSI[1]
+[app] Connection setup for PDU session[1] is successful, TUN interface[uesimtun0, 10.45.0.18] is up.
+```
+
+**Core logs** (`scp.log`; each NF logs the same pattern for its own NF instance ID):
+```
+[sbi] WARNING: Could not connect to server (7): Failed to connect to 127.0.0.10 port 7777 ...
+[scp] WARNING: response_handler() failed [-1]
+[sbi] WARNING: [e30ce330-...] Retry registration with NRF
+[sbi] ERROR: [e30ce330-...] HTTP Response Status Code [500]
+```
+
+**Capture** (`f6-nrf-down.pcap`, 148 frames; most NRF heartbeats removed, one NF kept as an example):
+
+| Frame | Time | Message | Note |
+|-------|------|---------|------|
+| 1–2 | 22:11:28.6 | NF → NRF heartbeat `PATCH /nnrf-nfm/v1/nf-instances/{id}` → `204` | last good heartbeat |
+| 3 | 22:11:36.230 | NF → SCP heartbeat `PATCH .../nf-instances/e30ce330-...` | |
+| 4–8 | 22:11:36.230 | SCP → NRF TCP SYN, NRF host answers RST | nothing listens on 127.0.0.10:7777 any more |
+| 9 | 22:11:36.233 | SCP → NF `500` | the SCP reports the failed hop as 500 |
+| 10–13 | 22:11:38.2 | NF → SCP `PUT .../nf-instances/{id}` (re-registration), SYN/RST, `500` | NFs fall back to re-registration every ~2 s |
+| 14–80 | 22:12:09.52–09.56 | Registration: AUSF, UDM, UDR, PCF through the SCP, Registration Accept | no NRF query at all |
+| 81–110 | 22:12:09.77–09.78 | PDU Session Establishment Request, `sm-contexts`, UDM, PCF, BSF | |
+| 111–112 | 22:12:09.784 | PFCP Session Establishment Request/Response SMF ↔ UPF | |
+| 115 | 22:12:09.786 | PDUSessionResourceSetupRequest + **PDU Session Establishment Accept** | |
+| 118–128 | 22:12:09.79 | Setup Response, `sm-contexts/17/modify`, PFCP modification, SMF registration in UDM | session complete |
+| 129–131 | 22:12:29.0 | UEContextRelease (radio-connection-with-ue-lost) | UE process stopped |
+| 132 | 22:12:40.746 | SCP → NF `500` | last failure |
+| 133–136 | 22:12:41.165 | NF → NRF `PUT .../nf-instances/{id}` → `201 Created` | NRF back; NFs register again |
+| 137–148 | 22:12:41.17 | `GET /nnrf-nfm/v1/nf-instances` and per-instance GETs → `200` | NFs refresh their view of the other NFs |
+
+The NRF was down from 22:11:36.23 to 22:12:41.17, about 65 s. The full capture has no `nnrf-disc` request at
+all, before, during or after the outage.
+
+**Why it still works:** an NF uses the NRF to register itself and to discover other NFs, not to carry
+traffic. Every SBI request in the call flow goes through the SCP and already carries
+`3gpp-sbi-target-apiroot` (for example `http://127.0.0.12:7777` for the UDM) next to the
+`3gpp-sbi-discovery-*` headers. As I read it, the sending NF already knows the target from the NF profiles
+it learned while the NRF was up, so the SCP can forward the request without asking the NRF. The NRF is
+needed again only when an NF needs a target it has not learned yet, or when the stored profiles stop being
+valid.
+
+**What breaks in a real network:**
+- A new NF instance (scale-out, restart, new UPF/SMF pool member) cannot register, and nobody can discover it.
+- When an NF is removed or fails, the others are not notified: they keep sending to the dead instance until
+  their own timers or errors move them away.
+- If the NRF stays down longer than the stored NF profiles are valid, discovery starts to fail and new
+  procedures fail with it. That window depends on the implementation and configuration; it was not reached
+  in 65 s here.
+- That is why production NRFs run as a redundant pair or cluster, and why an NRF outage can look
+  "fine" for minutes and then fail all at once.
+
+**How to find it in production:**
+1. Service is up, but NF logs show heartbeat/registration failures towards the NRF (here: HTTP 500 from the
+   SCP, `Retry registration with NRF`).
+2. Check the NRF itself and the path to it: TCP RST or timeouts towards the NRF address in a capture.
+3. Check whether anything changed in the NF topology during the outage (new instances, restarts). Those are
+   the procedures that fail first.
+
+**Fix:** start the NRF (`systemctl start open5gs-nrfd`). The NFs register again on their own (frames 133–148);
+no restart of other NFs was needed here.
 

@@ -7,6 +7,7 @@ Captures are in [`pcap/`](pcap/). Wireshark setup as in [callflow.md](callflow.m
 |---|--------|---------------|-----------|---------|
 | F1 | Open5GS sends a type 2 TAI list, srsUE misparses it and drops the GUTI | Attach works; after every idle period the UE is rejected and re-attaches with a new IP | #9 UE identity cannot be derived by the network | [f1-tai-list-type2.pcap](pcap/f1-tai-list-type2.pcap) |
 | F2 | OPc on the UE differs from the HSS record | `Network authentication failure`, no attach, retry every ~40 s | UE → MME Authentication failure #20 MAC failure, MME → UE Authentication reject | [f2-bad-opc.pcap](pcap/f2-bad-opc.pcap) |
+| F3 | Subscriber deleted from the HSS | `Attach Reject. Cause = 08`, no retry | HSS: Experimental-Result 5001 DIAMETER_ERROR_USER_UNKNOWN → EMM #8 EPS and non-EPS services not allowed | [f3-no-subscriber.pcap](pcap/f3-no-subscriber.pcap) |
 
 ---
 
@@ -137,3 +138,40 @@ from the UE, ends with Authentication Reject without a failure message from the 
 1. Many `Authentication failure #20` for one IMSI, none for others → SIM or HSS provisioning of that subscriber (K, OPc, AMF field, wrong batch).
 2. #20 for a whole IMSI range at once → HSS/AuC change (OP/OPc or algorithm configuration).
 3. #21 synch failure instead of #20 → keys are right, SQN is out of range; the HSS resynchronises with AUTS.
+
+---
+
+## F3. Subscriber not in the HSS
+
+**Break:** `dbctl remove 250990000000001` (the HSS and the 5G UDR share the MongoDB `subscribers`
+collection), `.ctxt` deleted, normal `ue.conf`. Restored afterwards with `dbctl add` and the same K/OPc.
+
+**UE:** `Received Attach Reject. Cause= 08`, RRC released, **no further attempts**.
+
+**Capture** (`f3-no-subscriber.pcap`, 1440 frames):
+
+| Frame | Path | Message | Notes |
+|------:|------|---------|-------|
+| 807 | eNB → MME | Attach request | identity IMSI 250990000000001 |
+| 808 | MME → HSS | AIR (S6a) | |
+| 814 | HSS → MME | AIA, **Experimental-Result-Code 5001 DIAMETER_ERROR_USER_UNKNOWN** | no Result-Code AVP, no vector; 9 ms |
+| 815 | MME → UE | **Attach reject, EMM #8** EPS services and non-EPS services not allowed | 62 ms after the Attach Request |
+| 816/818 | MME ↔ eNB | UEContextReleaseCommand/Complete | |
+| 1259 | eNB → MME | Detach request (switch-off, IMSI) on srsUE stop | answered #9, the MME has no context |
+
+No Authentication Request is sent: without a subscriber record there is no vector.
+
+**Why no retry:** #8 tells the UE to consider the USIM invalid for EPS and non-EPS services until it is
+switched off or the USIM is replaced (TS 24.301 §5.5.1.2.5). Compare F2: after #20 the UE kept trying.
+The Diameter-to-NAS mapping (5001 → #8) follows TS 29.272 Annex A.
+
+**Diameter detail:** S6a errors that are specific to 3GPP come back in `Experimental-Result`
+(Vendor-Id 10415 + Experimental-Result-Code), not in `Result-Code`. A filter on `diameter.Result-Code`
+alone misses them; use `diameter.Experimental-Result-Code`.
+
+**How to find it on a live network:**
+
+1. Attach Reject #8 right after AIR, with no Authentication Request in between → HSS does not know the IMSI.
+2. One IMSI → provisioning (not created, deleted, typo in IMSI). A whole range → missing IMSI range
+   or routing: in roaming, the DEA/DRA may route the AIR to the wrong HSS.
+3. Check the HSS/HLR record and the Diameter routing table for the IMSI prefix.

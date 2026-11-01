@@ -4,7 +4,7 @@ Home lab for mobile core networks: 5G SA, LTE/EPC, IMS/VoLTE, SS7/SIGTRAN and MP
 Every module has its configs, packet captures, call-flow walkthroughs and break/fix scenarios.
 
 Radio is virtual only (UERANSIM, srsRAN over ZeroMQ). Nothing is transmitted over the air.
-All subscriber data uses test values (PLMN 001/01, test IMSIs, example keys).
+All subscriber data uses test values (lab PLMN 250/99 on an isolated host, test IMSI, example keys).
 
 ## Environment
 
@@ -18,7 +18,7 @@ All subscriber data uses test values (PLMN 001/01, test IMSIs, example keys).
 | # | Module | Stack | Status |
 |---|--------|-------|--------|
 | 1 | [5G SA core and first registration](01-5gsa-core/) | Open5GS, UERANSIM | done |
-| 2 | [LTE / EPC and Diameter](02-lte-epc/) | Open5GS EPC, srsRAN 4G (ZMQ) | in progress |
+| 2 | [LTE / EPC and Diameter](02-lte-epc/) | Open5GS EPC, srsRAN 4G (ZMQ) | done |
 | 3 | IMS / VoLTE | Kamailio IMS, Open5GS | planned |
 | 4 | Transport: MPLS / BGP / OSPF | containerlab, FRR | planned |
 | 5 | SS7 / SIGTRAN / CAMEL, SGs | Osmocom | planned |

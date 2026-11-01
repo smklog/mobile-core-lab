@@ -6,6 +6,7 @@ Captures are in [`pcap/`](pcap/). Wireshark setup as in [callflow.md](callflow.m
 | # | Broken | Symptom on UE | EMM cause | Capture |
 |---|--------|---------------|-----------|---------|
 | F1 | Open5GS sends a type 2 TAI list, srsUE misparses it and drops the GUTI | Attach works; after every idle period the UE is rejected and re-attaches with a new IP | #9 UE identity cannot be derived by the network | [f1-tai-list-type2.pcap](pcap/f1-tai-list-type2.pcap) |
+| F2 | OPc on the UE differs from the HSS record | `Network authentication failure`, no attach, retry every ~40 s | UE → MME Authentication failure #20 MAC failure, MME → UE Authentication reject | [f2-bad-opc.pcap](pcap/f2-bad-opc.pcap) |
 
 ---
 
@@ -88,3 +89,51 @@ accepted, same IP, and the srsUE log shows `Set ue-Identity to 0x1:0x3221227080`
 3. One UE model or firmware only → UE-side NAS issue; all UEs → MME or S1 problem.
 4. Compare the IEs in Attach Accept that the failing UE must parse with what the working UEs get
    (TAI list type, optional IEs) and check against the spec coding.
+
+---
+
+## F2. Wrong OPc on the UE
+
+**Break:** last hex digit of OPc changed in a copy of the UE config only
+(`...6183CA` → `...6183CB` in `ue-bad-opc.conf`); the HSS keeps the correct K/OPc.
+The saved NAS context (`~/.config/srsran/.ctxt`) was deleted first; with it the UE attaches with a
+known GUTI and the MME skips authentication, so the bad key is never tested.
+
+**UE:** `Warning: Network authentication failure`, RRC released, new attempt about every 40 s.
+
+**MME log:**
+
+```
+[emm] WARNING: Authentication failure (../src/mme/emm-sm.c:1140)
+[emm] WARNING: Authentication failure(MAC failure) (../src/mme/emm-sm.c:1148)
+```
+
+**Capture** (`f2-bad-opc.pcap`, 2658 frames, one cycle of four shown):
+
+| Frame | Path | Message | Notes |
+|------:|------|---------|-------|
+| 1369 | eNB → MME | Attach request | identity IMSI (no stored GUTI) |
+| 1370/1382 | MME ↔ HSS | AIR/AIA (S6a) | HSS builds the vector with the correct OPc, Result-Code success |
+| 1383 | MME → UE | Authentication request | RAND, AUTN |
+| 1385 | UE → MME | **Authentication failure, EMM cause #20 MAC failure** | 41 ms later |
+| 1386 | MME → UE | **Authentication reject** | |
+| 1387/1389 | MME ↔ eNB | UEContextReleaseCommand/Complete | |
+
+Attempts at 22:34:06, 22:34:46, 22:35:24 and 22:35:29 UTC. There is no ULR, no Create Session and
+no Gx: the procedure stops before the MME tells the HSS where the UE is. Stopping srsUE sent a
+switch-off Detach with the IMSI (frame 2466), answered with #9 like in F1, and one more attach
+attempt followed at once.
+
+**Why:** in EPS-AKA the UE checks the network first (TS 33.401 §6.1.1, TS 33.102 §6.3.3).
+It recomputes MAC from RAND, SQN and its own K/OPc; with a different OPc the result does not match
+the MAC in AUTN and the UE answers with Authentication Failure #20 instead of a RES (TS 24.301 §5.4.2.6).
+The MME never compares RES with XRES here. The opposite case, a correct AUTN but a wrong RES
+from the UE, ends with Authentication Reject without a failure message from the UE.
+
+**Same fault in 5G (Module 1 F1):** 5GMM #20 MAC failure, the AUSF and UDM take the place of the HSS.
+
+**How to find it on a live network:**
+
+1. Many `Authentication failure #20` for one IMSI, none for others → SIM or HSS provisioning of that subscriber (K, OPc, AMF field, wrong batch).
+2. #20 for a whole IMSI range at once → HSS/AuC change (OP/OPc or algorithm configuration).
+3. #21 synch failure instead of #20 → keys are right, SQN is out of range; the HSS resynchronises with AUTS.

@@ -8,6 +8,7 @@ Captures are in [`pcap/`](pcap/). Wireshark setup as in [callflow.md](callflow.m
 | F1 | Open5GS sends a type 2 TAI list, srsUE misparses it and drops the GUTI | Attach works; after every idle period the UE is rejected and re-attaches with a new IP | #9 UE identity cannot be derived by the network | [f1-tai-list-type2.pcap](pcap/f1-tai-list-type2.pcap) |
 | F2 | OPc on the UE differs from the HSS record | `Network authentication failure`, no attach, retry every ~40 s | UE → MME Authentication failure #20 MAC failure, MME → UE Authentication reject | [f2-bad-opc.pcap](pcap/f2-bad-opc.pcap) |
 | F3 | Subscriber deleted from the HSS | `Attach Reject. Cause = 08`, no retry | HSS: Experimental-Result 5001 DIAMETER_ERROR_USER_UNKNOWN → EMM #8 EPS and non-EPS services not allowed | [f3-no-subscriber.pcap](pcap/f3-no-subscriber.pcap) |
+| F4 | PCRF stopped | RRC released, no attach; srsUE prints no reject | PGW: GTPv2 #100 Remote peer not responding; SGW → MME #103; EMM #17 + ESM #38 | [f4-pcrf-down.pcap](pcap/f4-pcrf-down.pcap) |
 
 ---
 
@@ -175,3 +176,54 @@ alone misses them; use `diameter.Experimental-Result-Code`.
 2. One IMSI → provisioning (not created, deleted, typo in IMSI). A whole range → missing IMSI range
    or routing: in roaming, the DEA/DRA may route the AIR to the wrong HSS.
 3. Check the HSS/HLR record and the Diameter routing table for the IMSI prefix.
+
+---
+
+## F4. PCRF down (no Gx peer)
+
+**Break:** `systemctl stop open5gs-pcrfd`, `.ctxt` deleted, normal UE config. PCRF started again after the test.
+
+**UE:** RRC connected, then `RRC Connection Release`, back to idle. srsUE does not print the reject;
+the capture shows it.
+
+**SMF (PGW-C) log:**
+
+```
+[smf] ERROR: No Gx Diameter Peer (../src/smf/s5c-handler.c:160)
+[diam] INFO: CONNECTED TO 'pcrf.localdomain' (SCTP,soc#10)      <- after the PCRF was started again
+```
+
+**Capture** (`f4-pcrf-down.pcap`, 1777 frames, first attempt):
+
+| Frame | Path | Message | Notes |
+|------:|------|---------|-------|
+| 150, 512, 872, ... | PGW-C → PCRF :3868 | SCTP INIT → ABORT | Diameter peer reconnect every ~30 s; port closed |
+| 976–1003 | | Attach request, AIR/AIA, authentication, security mode, ULR/ULA | all normal: the HSS side is fine |
+| 1004 | MME → SGW-C | Create Session Request | |
+| 1005–1006 | SGW-C ↔ SGW-U | PFCP Session Establishment | SGW-U session created |
+| 1007 | SGW-C → PGW-C | Create Session Request | |
+| 1008 | PGW-C → SGW-C | **Create Session Response, cause #100 Remote peer not responding** | 3 ms; no CCR is sent at all |
+| 1009 | SGW-C → MME | **Create Session Response, cause #103 Conditional IE missing** | the cause changed on the way |
+| 1010 | MME → UE | **Attach reject, EMM #17 Network failure + PDN connectivity reject, ESM #38 Network failure** | |
+| 1011/1013 | MME ↔ eNB | UEContextReleaseCommand/Complete | |
+
+Second attempt at 22:48:28 (frames 1553–1590) is identical.
+
+**Observations:**
+
+1. The PGW fails fast and says why (#100, TS 29.274 §8.4): with no Diameter connection to the PCRF
+   it does not even try a CCR.
+2. **The cause is not passed through.** The SGW-C turns #100 from the PGW into #103 toward the MME.
+   Looking only at S11 (or at MME counters per cause) points at a malformed message instead of a dead
+   PCRF. Always follow the cause hop by hop: S11 → S5 → Gx.
+3. The SGW-U session created in 1005–1006 is not deleted in this capture (no PFCP Session Deletion
+   on Sxa for either attempt). Worth checking SGW-U session counts after this kind of failure.
+4. In 5G the same fault (no PCF) shows up as a failed Npcf_SMPolicyControl_Create and 5GSM #38 (compare Module 1 F5 for the UPF).
+
+**How to find it on a live network:**
+
+1. Attach Reject #17/#38 after a successful ULA → the problem is on S11/S5/Gx, not on S6a.
+2. Create Session Response cause on S5 (not only S11), then Gx: CCR present? CCA Result-Code?
+3. No CCR at all and Diameter peer down in the PGW (SCTP INIT/ABORT or DWR timeouts to the PCRF/DRA)
+   → PCRF or DRA unreachable. Operators often configure Gx failover (secondary PCRF, or local policy
+   "continue without PCRF"); this lab has none.

@@ -1,11 +1,12 @@
 # Module 2 call flows
 
-Two captures, loopback only, ZMQ sample ports (2000/2001) excluded:
+Captures, loopback only, ZMQ sample ports (2000/2001) excluded:
 
 | File | Contents | Used for |
 |------|----------|----------|
 | [`pcap/f1-tai-list-type2.pcap`](pcap/f1-tai-list-type2.pcap) | 9229 frames. First attach with IMSI, full EPS-AKA and S6a (frames 2022–2110), then the F1 loop | §1, §2 |
 | [`pcap/m2-reference.pcap`](pcap/m2-reference.pcap) | 2741 frames, 212 s. S1 Setup, GUTI attach, idle, Service Request, ping, detach | §3–§5 |
+| [`pcap/m2-dedicated-bearer-qci1.pcap`](pcap/m2-dedicated-bearer-qci1.pcap) | 2169 frames, 152 s. Attach with a PCC rule, dedicated bearer QCI 1, idle, Service Request, ping over the dedicated bearer, detach | §6 |
 
 Wireshark: S1AP (SCTP 36412), Diameter (3868), GTPv2 (2123), GTP-U (2152) and PFCP (8805) are decoded
 by default. Enable Preferences → Protocols → NAS-EPS → "Try to detect and decode EEA0 ciphered messages"
@@ -164,3 +165,62 @@ TS 23.401 §5.3.8.2.1.
 | 2410–2411 | 186.158 | UEContextReleaseCommand (NAS-cause detach) / Complete |
 
 Switch-off detach has no Detach Accept toward the UE. Whole teardown: 13 ms.
+
+## 6. Network-initiated dedicated bearer (Gx → GBR bearer, QCI 1)
+
+TS 23.401 §5.4.1 (dedicated bearer activation), TS 29.212 (Gx), TS 24.301 §6.4.2.
+
+**Setup.** The PCRF installs a PCC rule from the subscriber record: ICMP in both directions on QCI 1,
+GBR/MBR 128 kbps. Added to the test subscriber in MongoDB (Open5GS needs `NumberInt` for integer fields):
+
+```bash
+sudo docker exec mongo mongosh open5gs --quiet --eval 'db.subscribers.updateOne({imsi:"250990000000001"},
+ {$set:{"slice.0.session.0.pcc_rule":[{qos:{index:NumberInt(1),
+  arp:{priority_level:NumberInt(2),pre_emption_capability:NumberInt(2),pre_emption_vulnerability:NumberInt(2)},
+  mbr:{downlink:{value:NumberInt(128),unit:NumberInt(1)},uplink:{value:NumberInt(128),unit:NumberInt(1)}},
+  gbr:{downlink:{value:NumberInt(128),unit:NumberInt(1)},uplink:{value:NumberInt(128),unit:NumberInt(1)}}},
+  flow:[{direction:NumberInt(2),description:"permit out icmp from any to assigned"},
+        {direction:NumberInt(1),description:"permit out icmp from any to assigned"}]}]}})'
+```
+
+srsENB also needs a `qci = 1` entry in `rb.conf` (`qci_config`); the stock file has only QCI 7 and 9.
+Without it the eNB rejects the bearer, see [F6](failures.md#f6-enb-has-no-qci-1-config-dedicated-bearer-rejected).
+
+**Activation**, right after the default bearer (`m2-dedicated-bearer-qci1.pcap`):
+
+| Frame | Time, s | Path | Message | Notes |
+|------:|--------:|------|---------|-------|
+| 596/602 | 46.515 | PGW-C ↔ PCRF | Gx CCR-Initial / **CCA** | CCA carries Charging-Rule-Install: `internet-g1`, two Flow-Description `permit out icmp from any to assigned`, QCI 1, GBR 128 kbps |
+| 605/609 | 46.526 | PGW-C → SGW-C → MME | Create Session Response | default bearer EBI 5, QCI 9 |
+| 610 | 46.528 | MME → eNB | InitialContextSetupRequest, Attach accept | E-RAB 5 only |
+| 612/615 | 46.529 | PGW-C → SGW-C → MME | **Create Bearer Request** | LBI 5, new EBI 0 (MME assigns), TFT: 2 filters, protocol ICMP, UL and DL; QCI 1, ARP PL 2, MBR/GBR 128 kbps |
+| 630 | 46.788 | eNB → MME | InitialContextSetupResponse, Attach complete | the MME sends the second E-RAB only after this |
+| 633 | 46.789 | MME → eNB | **E-RABSetupRequest** + Activate dedicated EPS bearer context request | e-RAB 6, QCI 1, SGW S1-U TEID 0xf5e8; NAS: EBI 6, linked EBI 5, TFT, QoS 128 kbps |
+| 636 | 46.790 | eNB → MME | **E-RABSetupResponse** | e-RAB 6 set up, eNB TEID 0x2 |
+| 648 | 46.996 | UE → MME | Activate dedicated EPS bearer context accept | |
+| 649/652 | 46.997 | MME → SGW-C → PGW-C | **Create Bearer Response** | cause 16 Request accepted, EBI 6 |
+
+**After idle.** The UE went idle at 97.5 s (user-inactivity). On Service Request (frame 1395)
+the InitialContextSetupRequest (1399) restores **both** E-RABs: 5 (QCI 9, SGW TEID 0x69ff) and
+6 (QCI 1, SGW TEID 0xf5e8); the eNB answers with TEIDs 0x3 and 0x4 (1413).
+
+**Traffic.** Every ICMP packet of the ping (frames 1405–1481) uses the dedicated bearer:
+
+| Leg | TEID |
+|-----|------|
+| S1-U uplink, eNB → SGW-U | 0xf5e8 (e-RAB 6) |
+| S5-U uplink, SGW-U → PGW-U | 0xeb60 |
+| S5-U downlink, PGW-U → SGW-U | 0xcd66 |
+| S1-U downlink, SGW-U → eNB | 0x4 (e-RAB 6) |
+
+The UE TFT sends ICMP up on bearer 6; the PGW-U SDF filter sends ICMP down on bearer 6. Other traffic
+stays on the default bearer.
+
+Rules:
+
+1. The dedicated bearer is network-initiated: PCRF rule → Create Bearer Request on S5/S11 →
+   E-RAB Setup on S1 → NAS activate. The UE never asks for it here.
+2. Create Bearer Response goes back only after **both** the eNB (E-RAB Setup Response) and the UE
+   (NAS accept) agree. If either refuses, the bearer does not exist, even though the PCRF installed the rule.
+3. The MME assigns the EBI; the PGW sends EBI 0 in the request.
+

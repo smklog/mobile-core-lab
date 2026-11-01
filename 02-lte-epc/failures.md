@@ -10,6 +10,7 @@ Captures are in [`pcap/`](pcap/). Wireshark setup as in [callflow.md](callflow.m
 | F3 | Subscriber deleted from the HSS | `Attach Reject. Cause = 08`, no retry | HSS: Experimental-Result 5001 DIAMETER_ERROR_USER_UNKNOWN → EMM #8 EPS and non-EPS services not allowed | [f3-no-subscriber.pcap](pcap/f3-no-subscriber.pcap) |
 | F4 | PCRF stopped | RRC released, no attach; srsUE prints no reject | PGW: GTPv2 #100 Remote peer not responding; SGW → MME #103; EMM #17 + ESM #38 | [f4-pcrf-down.pcap](pcap/f4-pcrf-down.pcap) |
 | F5 | SGW-C stopped | `Attach failed (attempt n/5)`, new attempt every ~30 s | none: S11 Create Session times out (3 sends, 2.5 s apart), UE context released without Attach Reject | [f5-sgw-down.pcap](pcap/f5-sgw-down.pcap) |
+| F6 | PCRF installs a QCI 1 rule, eNB has no QCI 1 config | nothing: attach and ping work, traffic stays on the default bearer | no EMM cause: S1AP E-RAB Setup fails with not-supported-QCI-value, PGW Create Bearer Request times out | [m2-dedicated-bearer.pcap](pcap/m2-dedicated-bearer.pcap) |
 
 ---
 
@@ -276,3 +277,64 @@ Attempts at 22:54:32, 22:55:04 and 22:55:42 look the same.
 2. Create Session Requests with repeated sequence numbers and no response → the SGW (or the path to it) is down.
 3. In production the MME selects SGWs by DNS (TAI FQDN) and would mark the dead one and try another;
    GTP Echo Request/Response on S11 shows path failure before users do. This lab has one SGW and a static address.
+
+## F6. eNB has no QCI 1 config: dedicated bearer rejected
+
+**Break:** PCC rule ICMP → QCI 1, GBR 128 kbps on the subscriber (see [callflow §6](callflow.md#6-network-initiated-dedicated-bearer-gx--gbr-bearer-qci-1)),
+srsENB with the stock `rb.conf` (`qci_config` has only QCI 7 and 9).
+
+**UE:** `Network attach successful`, ping works. Nothing on the UE shows that a bearer was refused.
+
+**Capture** (`m2-dedicated-bearer.pcap`, 2223 frames):
+
+| Frame | Time, s | Path | Message | Notes |
+|------:|--------:|------|---------|-------|
+| 547/553 | 41.376 | PGW-C ↔ PCRF | Gx CCR-I / CCA | Charging-Rule-Install `internet-g1`, QCI 1, GBR 128 kbps |
+| 564/567 | 41.411 | PGW-C → SGW-C → MME | Create Bearer Request | TFT ICMP UL/DL, QCI 1 |
+| 579 | 41.671 | MME → eNB | E-RABSetupRequest + Activate dedicated EPS bearer context request | e-RAB 6, QCI 1 |
+| 582 | 41.671 | eNB → MME | **E-RABSetupResponse, E-RABFailedToSetupList** | **radioNetwork not-supported-QCI-value**, 0.2 ms later |
+| 618/619 | 43.914 | PGW-C → SGW-C → MME | Create Bearer Request, retransmission | the MME does not answer |
+| 656/657 | 46.415 | | second retransmission | |
+| 680–683 | 48.916 | SGW-C/PGW-C → SGW-U/PGW-U | PFCP Session Modification | Remove PDR/FAR for the bearer 6 rules, 7.5 s (T3×N3) after the first request |
+
+There is **no Create Bearer Response** (GTPv2 type 96) in the capture. ICMP runs on the default bearer
+(S1-U uplink TEID 0xa320).
+
+**srsENB source** (`srsenb/src/stack/rrc/rrc_bearer_cfg.cc`, `bearer_cfg_handler::add_erab`):
+a QCI not present in `qci_config` gives `QCI=%d not configured` and cause `not_supported_qci_value`.
+A GBR above the `prioritized_bit_rate` of that QCI gives `invalid_qos_combination`.
+
+**Fix:** add QCI 1 to `~/.config/srsran/rb.conf` (UM, like QCI 7):
+
+```
+qci_config = (
+{
+  qci = 1;
+  pdcp_config = { discard_timer = 100; pdcp_sn_size = 12; }
+  rlc_config = {
+    ul_um = { sn_field_length = 10; };
+    dl_um = { sn_field_length = 10; t_reordering = 45; };
+  };
+  logical_channel_config = { priority = 6; prioritized_bit_rate = 256; bucket_size_duration = 100; log_chan_group = 1; };
+  enb_specific = { dl_max_retx_thresh = 32; };
+},
+{ qci = 7; ...
+```
+
+Restart the eNB. Result: [callflow §6](callflow.md#6-network-initiated-dedicated-bearer-gx--gbr-bearer-qci-1),
+E-RAB 6 set up, Create Bearer Response cause 16, ICMP on TEID 0xf5e8.
+
+**Observations:**
+
+1. The failure is silent for the user: the default bearer carries the traffic, just without the GBR.
+   On a live network this is how VoLTE calls end up on QCI 9 or drop, while data looks fine.
+2. The MME got a clear S1AP cause but sent nothing back on S11. Open5GS leaves the PGW to time out
+   (TS 23.401 §5.4.1 expects a Create Bearer Response with a reject cause).
+3. The PCRF still believes the rule is active; no CCR-Update reports the failure.
+
+**How to find it on a live network:**
+
+1. Count E-RAB Setup failures per cause and QCI on the eNB/MME (KPI: E-RAB setup success rate by QCI).
+2. `not-supported-QCI-value` → RAN QCI profile missing on that eNB, not a core problem.
+3. GTPv2 Create Bearer Request retransmissions on S5/S11 with no response → look at S1 for the matching E-RAB.
+

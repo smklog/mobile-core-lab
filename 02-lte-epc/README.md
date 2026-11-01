@@ -4,7 +4,8 @@
 Attach the UE, pass user-plane traffic, go to idle and back, detach. Read S1AP, NAS-EPS, Diameter (S6a, Gx),
 GTPv2-C (S11, S5) and PFCP (Sxa/Sxb) in one capture.
 
-**Status:** attach, user plane (UE pings 8.8.8.8), idle → Service Request and detach work.
+**Status:** attach, user plane (UE pings 8.8.8.8), idle → Service Request, detach and a network-initiated
+dedicated GBR bearer (Gx rule → QCI 1) work.
 Call flows are in [callflow.md](callflow.md). Found and worked around an srsUE/Open5GS interop issue
 (UE could not leave idle), see [failures.md](failures.md#f1-tai-list-type-2-ue-cannot-leave-idle).
 
@@ -59,6 +60,8 @@ On the Open5GS side the MME needs a TAC range, not a single TAC (see F1):
       tac: [1-2]
 ```
 
+For a dedicated bearer with QCI 1 (callflow §6) the eNB needs a `qci = 1` entry in `rb.conf`, see F6.
+
 ## Run
 
 ```bash
@@ -106,5 +109,6 @@ Ping from netns `ue1` to 8.8.8.8: ~30–50 ms; the first packet after idle takes
 
 - [`pcap/m2-reference.pcap`](pcap/m2-reference.pcap): S1 Setup, GUTI attach, idle, Service Request, ping, detach (2741 frames)
 - [`pcap/f1-tai-list-type2.pcap`](pcap/f1-tai-list-type2.pcap): first IMSI attach with EPS-AKA and S6a, then the idle/re-attach loop of F1
-- [`callflow.md`](callflow.md): Attach with EPS-AKA, S6a, Gx, GTPv2 session setup, idle and Service Request, detach
-- [`failures.md`](failures.md): break/fix scenarios F1–F5 (TAI list interop, wrong OPc, unknown subscriber, PCRF down, SGW down)
+- [`pcap/m2-dedicated-bearer-qci1.pcap`](pcap/m2-dedicated-bearer-qci1.pcap): attach with a PCC rule, dedicated bearer QCI 1, ping over it after Service Request
+- [`callflow.md`](callflow.md): Attach with EPS-AKA, S6a, Gx, GTPv2 session setup, idle and Service Request, detach, dedicated bearer
+- [`failures.md`](failures.md): break/fix scenarios F1–F6 (TAI list interop, wrong OPc, unknown subscriber, PCRF down, SGW down, QCI not configured on the eNB)

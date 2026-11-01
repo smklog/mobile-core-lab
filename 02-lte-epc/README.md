@@ -112,3 +112,10 @@ Ping from netns `ue1` to 8.8.8.8: ~30–50 ms; the first packet after idle takes
 - [`pcap/m2-dedicated-bearer-qci1.pcap`](pcap/m2-dedicated-bearer-qci1.pcap): attach with a PCC rule, dedicated bearer QCI 1, ping over it after Service Request
 - [`callflow.md`](callflow.md): Attach with EPS-AKA, S6a, Gx, GTPv2 session setup, idle and Service Request, detach, dedicated bearer
 - [`failures.md`](failures.md): break/fix scenarios F1–F6 (TAI list interop, wrong OPc, unknown subscriber, PCRF down, SGW down, QCI not configured on the eNB)
+
+## Not covered
+
+- **Tracking Area Update.** srsUE (`srsue/src/stack/upper/nas.cc`, master) never builds a TAU Request:
+  T3412 from the Attach accept is ignored (`TODO: Handle t3412.unit`) and the TAI list is not checked,
+  so neither periodic nor mobility TAU can be triggered with this UE. TAU needs a UE that implements it
+  (commercial UE or another emulator).

@@ -107,4 +107,4 @@ Ping from netns `ue1` to 8.8.8.8: ~30–50 ms; the first packet after idle takes
 - [`pcap/m2-reference.pcap`](pcap/m2-reference.pcap): S1 Setup, GUTI attach, idle, Service Request, ping, detach (2741 frames)
 - [`pcap/f1-tai-list-type2.pcap`](pcap/f1-tai-list-type2.pcap): first IMSI attach with EPS-AKA and S6a, then the idle/re-attach loop of F1
 - [`callflow.md`](callflow.md): Attach with EPS-AKA, S6a, Gx, GTPv2 session setup, idle and Service Request, detach
-- [`failures.md`](failures.md): break/fix scenarios
+- [`failures.md`](failures.md): break/fix scenarios F1–F5 (TAI list interop, wrong OPc, unknown subscriber, PCRF down, SGW down)

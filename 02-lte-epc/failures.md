@@ -9,6 +9,7 @@ Captures are in [`pcap/`](pcap/). Wireshark setup as in [callflow.md](callflow.m
 | F2 | OPc on the UE differs from the HSS record | `Network authentication failure`, no attach, retry every ~40 s | UE → MME Authentication failure #20 MAC failure, MME → UE Authentication reject | [f2-bad-opc.pcap](pcap/f2-bad-opc.pcap) |
 | F3 | Subscriber deleted from the HSS | `Attach Reject. Cause = 08`, no retry | HSS: Experimental-Result 5001 DIAMETER_ERROR_USER_UNKNOWN → EMM #8 EPS and non-EPS services not allowed | [f3-no-subscriber.pcap](pcap/f3-no-subscriber.pcap) |
 | F4 | PCRF stopped | RRC released, no attach; srsUE prints no reject | PGW: GTPv2 #100 Remote peer not responding; SGW → MME #103; EMM #17 + ESM #38 | [f4-pcrf-down.pcap](pcap/f4-pcrf-down.pcap) |
+| F5 | SGW-C stopped | `Attach failed (attempt n/5)`, new attempt every ~30 s | none: S11 Create Session times out (3 sends, 2.5 s apart), UE context released without Attach Reject | [f5-sgw-down.pcap](pcap/f5-sgw-down.pcap) |
 
 ---
 
@@ -227,3 +228,51 @@ Second attempt at 22:48:28 (frames 1553–1590) is identical.
 3. No CCR at all and Diameter peer down in the PGW (SCTP INIT/ABORT or DWR timeouts to the PCRF/DRA)
    → PCRF or DRA unreachable. Operators often configure Gx failover (secondary PCRF, or local policy
    "continue without PCRF"); this lab has none.
+
+---
+
+## F5. SGW-C down (no answer on S11)
+
+**Break:** `systemctl stop open5gs-sgwcd` (SGW-U, PGW and PCRF running), `.ctxt` deleted, normal UE config.
+SGW-C started again after the test.
+
+**UE:** `RRC Connected` → `RRC Connection Release` → `Attach failed (attempt 1/5)`, then 2/5, ...
+
+**MME log:**
+
+```
+[mme] ERROR: GTP Timeout : IMSI[250990000000001] Message-Type[32] (../src/mme/mme-gtp-path.c:202)
+```
+
+Message type 32 is Create Session Request (TS 29.274 Table 6.1-1).
+
+**Capture** (`f5-sgw-down.pcap`, 2582 frames, first attempt):
+
+| Frame | Time (UTC) | Path | Message | Notes |
+|------:|------------|------|---------|-------|
+| 1177–1204 | 22:54:32.87–.96 | | Attach request, AIR/AIA, authentication, security mode, ULR/ULA | all normal |
+| 1205 | 22:54:32.959 | MME → SGW-C :2123 | Create Session Request, seq 0x0e | |
+| 1206 | 22:54:32.959 | kernel → MME | ICMP port unreachable | nothing listens on 127.0.0.3:2123 |
+| 1236 | 22:54:35.462 | MME → SGW-C | Create Session Request, **same seq 0x0e** | retransmission after 2.5 s |
+| 1265 | 22:54:37.965 | MME → SGW-C | Create Session Request, seq 0x0e | second retransmission |
+| 1303 | 22:54:40.467 | MME → eNB | UEContextReleaseCommand, NAS-cause normal-release | 7.5 s after the first send; **no Attach Reject** |
+
+Attempts at 22:54:32, 22:55:04 and 22:55:42 look the same.
+
+**Observations:**
+
+1. GTPv2 has its own reliability: the sender keeps the sequence number and retransmits on timer T3
+   for N3 times (TS 29.274 §7.6). Here: 1 send + 2 retransmissions, 2.5 s apart, then the MME gives up.
+   T3/N3 are configurable; a 7.5 s stall is visible to the user as a long "no service".
+2. The MME ignores the ICMP port unreachable and waits for the timer anyway.
+3. The MME releases the UE without an Attach Reject, so the UE has no cause; it treats the attempt
+   as failed on its own timer and counts attempts (srsUE: 5).
+4. Compare F4: there the SGW was alive, the PGW answered with a cause and the UE got a clean reject
+   in under 10 ms. A dead node on S11 is slower and gives less information than a node that refuses.
+
+**How to find it on a live network:**
+
+1. Attach failures with no EMM cause and UE context release ~T3×N3 after ULA → look at S11.
+2. Create Session Requests with repeated sequence numbers and no response → the SGW (or the path to it) is down.
+3. In production the MME selects SGWs by DNS (TAI FQDN) and would mark the dead one and try another;
+   GTP Echo Request/Response on S11 shows path failure before users do. This lab has one SGW and a static address.

@@ -20,8 +20,8 @@ All subscriber data uses test values (lab PLMN 250/99 on an isolated host, test 
 | 1 | [5G SA core and first registration](01-5gsa-core/) | Open5GS, UERANSIM | done |
 | 2 | [LTE / EPC and Diameter](02-lte-epc/) | Open5GS EPC, srsRAN 4G (ZMQ) | done |
 | 3 | IMS / VoLTE | Kamailio IMS, Open5GS | planned |
-| 4 | Cloud-native 5G core on Kubernetes | k3s, Helm, Open5GS, UERANSIM | planned |
-| 5 | Transport: MPLS / BGP / OSPF | containerlab, FRR | planned |
+| 4 | Transport: MPLS / BGP / OSPF | containerlab, FRR | planned |
+| 5 | Cloud-native 5G core on Kubernetes | k3s, Helm, Open5GS, UERANSIM | planned |
 | 6 | SS7 / SIGTRAN / CAMEL, SGs | Osmocom | planned |
 | 7 | Metrics, KPIs and analytics | Prometheus, Grafana, Python | planned |
 | 8 | 5G NSA and SDN (optional) | srsRAN, Open5GS | planned |
